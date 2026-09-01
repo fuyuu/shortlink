@@ -26,4 +26,9 @@ public class RedisKeyConstant {
      */
     public static final String SHORT_LINK_CREATE_LOCK_KEY = "short-link:lock:create";
 
+    /**
+     * 短链接缓存关键跳转前缀 Key
+     */
+    public static final String GOTO_SHORT_LINK_KEY = "short-link:goto:%s";
+
 }
