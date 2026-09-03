@@ -36,4 +36,9 @@ public class RedisKeyConstant {
      */
     public static final String GOTO_IS_NULL_SHORT_LINK_KEY = "short-link:is-null:goto_%s";
 
+    /**
+     * 短链接缓存重建-跳转锁前缀 Key
+     */
+    public static final String LOCK_GOTO_SHORT_LINK_KEY = "short-link:lock:goto:%s";
+
 }
