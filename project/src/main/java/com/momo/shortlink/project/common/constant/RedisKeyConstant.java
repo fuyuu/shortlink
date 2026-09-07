@@ -41,4 +41,9 @@ public class RedisKeyConstant {
      */
     public static final String LOCK_GOTO_SHORT_LINK_KEY = "short-link:lock:goto:%s";
 
+    /**
+     * 短链接修改分组 ID 锁前缀 Key
+     */
+    public static final String LOCK_GID_UPDATE_KEY = "short-link:lock:update-gid:%s";
+
 }
