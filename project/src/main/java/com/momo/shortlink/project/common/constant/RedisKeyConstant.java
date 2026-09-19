@@ -46,4 +46,9 @@ public class RedisKeyConstant {
      */
     public static final String LOCK_GID_UPDATE_KEY = "short-link:lock:update-gid:%s";
 
+    /**
+     * 短链接统计判断是否新用户缓存标识
+     */
+    public static final String SHORT_LINK_STATS_UV_KEY = "short-link:stats:uv:";
+
 }
