@@ -56,4 +56,9 @@ public class RedisKeyConstant {
      */
     public static final String SHORT_LINK_STATS_UIP_KEY = "short-link:stats:uip:";
 
+    /**
+     * 短链接延迟队列消费统计 Key
+     */
+    public static final String DELAY_QUEUE_STATS_KEY = "short-link:delay-queue:stats";
+
 }
