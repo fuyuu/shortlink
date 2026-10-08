@@ -66,6 +66,7 @@ public class RedisKeyConstant {
      *
      * @deprecated 已由 RabbitMQ 主交换机和主队列重构替代，仅保留用于历史追溯。
      */
+    @Deprecated(since = "RabbitMQ重构", forRemoval = false)
     public static final String SHORT_LINK_STATS_STREAM_TOPIC_KEY = "short-link:stats-stream";
 
     /**
@@ -73,6 +74,7 @@ public class RedisKeyConstant {
      *
      * @deprecated 已由 RabbitMQ 消费者和手动 ACK 机制重构替代，仅保留用于历史追溯。
      */
+    @Deprecated(since = "RabbitMQ重构", forRemoval = false)
     public static final String SHORT_LINK_STATS_STREAM_GROUP_KEY = "short-link:stats-stream:only-group";
 
 }

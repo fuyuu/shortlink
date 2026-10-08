@@ -47,7 +47,7 @@ import com.momo.shortlink.project.dto.resp.ShortLinkBatchCreateRespDTO;
 import com.momo.shortlink.project.dto.resp.ShortLinkCreateRespDTO;
 import com.momo.shortlink.project.dto.resp.ShortLinkGroupCountQueryRespDTO;
 import com.momo.shortlink.project.dto.resp.ShortLinkPageRespDTO;
-import com.momo.shortlink.project.mq.producer.ShortLinkStatsSaveProducer;
+import com.momo.shortlink.project.mq.producer.ShortLinkStatsRabbitDispatcher;
 import com.momo.shortlink.project.service.ShortLinkService;
 import com.momo.shortlink.project.toolkit.HashUtil;
 import com.momo.shortlink.project.toolkit.LinkUtil;
@@ -77,7 +77,6 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -106,7 +105,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     private final ShortLinkGotoMapper shortLinkGotoMapper;
     private final StringRedisTemplate stringRedisTemplate;
     private final RedissonClient redissonClient;
-    private final ShortLinkStatsSaveProducer shortLinkStatsSaveProducer;
+    private final ShortLinkStatsRabbitDispatcher shortLinkStatsRabbitDispatcher;
     private final GotoDomainWhiteListConfiguration gotoDomainWhiteListConfiguration;
 
     @Value("${short-link.domain.default}")
@@ -116,7 +115,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     @Override
     public ShortLinkCreateRespDTO createShortLink(ShortLinkCreateReqDTO requestParam) {
         // 短链接接口的并发量有多少？如何测试？
-        verificationWhitelist(requestParam.getOriginUrl());
+        verifyOriginUrl(requestParam.getOriginUrl());
         String shortLinkSuffix = generateSuffix(requestParam);
         String fullShortUrl = StrBuilder.create(createShortLinkDefaultDomain)
                 .append("/")
@@ -172,7 +171,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
 
     @Override
     public ShortLinkCreateRespDTO createShortLinkByLock(ShortLinkCreateReqDTO requestParam) {
-        verificationWhitelist(requestParam.getOriginUrl());
+        verifyOriginUrl(requestParam.getOriginUrl());
         String fullShortUrl;
         // 为什么说布隆过滤器性能远胜于分布式锁？
         RLock lock = redissonClient.getLock(SHORT_LINK_CREATE_LOCK_KEY);
@@ -255,7 +254,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
     @Transactional(rollbackFor = Exception.class)
     @Override
     public void updateShortLink(ShortLinkUpdateReqDTO requestParam) {
-        verificationWhitelist(requestParam.getOriginUrl());
+        verifyOriginUrl(requestParam.getOriginUrl());
         LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
                 .eq(ShortLinkDO::getGid, requestParam.getOriginGid())
                 .eq(ShortLinkDO::getFullShortUrl, requestParam.getFullShortUrl())
@@ -367,11 +366,13 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
         return BeanUtil.copyToList(shortLinkDOList, ShortLinkGroupCountQueryRespDTO.class);
     }
 
+    // 说明：@SneakyThrows 会把 sendRedirect 抛出的 IOException 转为运行时异常上抛给 Servlet 容器（最终 500）
     @SneakyThrows
     @Override
     public void restoreUrl(String shortUri, ServletRequest request, ServletResponse response) {
         // 短链接接口的并发量有多少？如何测试？
         // 面试中如何回答短链接是如何跳转长链接？
+        // 步骤1：拼接完整短链接（域名 + 非 80 端口 + 后缀），作为缓存 key、布隆元素与路由查询的统一标识
         String serverName = request.getServerName();
         String serverPort = Optional.of(request.getServerPort())
                 .filter(each -> !Objects.equals(each, 80))
@@ -379,63 +380,78 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
                 .map(each -> ":" + each)
                 .orElse("");
         String fullShortUrl = serverName + serverPort + "/" + shortUri;
+        // 步骤2：先查 Redis 跳转缓存，命中即 302 返回，预期绝大多数请求走此分支
         String originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
         if (StrUtil.isNotBlank(originalLink)) {
+            // 先记访问统计再重定向，响应提交后 uv Cookie 就写不进去了
             shortLinkStats(buildLinkStatsRecordAndSetUser(fullShortUrl, request, response));
             ((HttpServletResponse) response).sendRedirect(originalLink);
             return;
         }
+        // 步骤3：布隆过滤器预判存在性（无假阴性），判定不存在可直接拦截，防止非法后缀穿透查库
         boolean contains = shortUriCreateCachePenetrationBloomFilter.contains(fullShortUrl);
         if (!contains) {
+            // 边界：短链确实不存在 → 跳转未找到页面
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
+        // 步骤4：空值缓存兜底，拦截布隆假阳性与已删除/已过期的短链，30 分钟内不再查库
         String gotoIsNullShortLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl));
         if (StrUtil.isNotBlank(gotoIsNullShortLink)) {
             ((HttpServletResponse) response).sendRedirect("/page/notfound");
             return;
         }
+        // 步骤5：按 fullShortUrl 粒度加锁（不传 leaseTime，由 Watchdog 自动续期），防止热点 key 失效瞬间击穿数据库
         RLock lock = redissonClient.getLock(String.format(LOCK_GOTO_SHORT_LINK_KEY, fullShortUrl));
         lock.lock();
         try {
+            // 步骤6：双重检查缓存，等锁期间可能已有线程完成回写，命中则直接返回
             originalLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_SHORT_LINK_KEY, fullShortUrl));
             if (StrUtil.isNotBlank(originalLink)) {
                 shortLinkStats(buildLinkStatsRecordAndSetUser(fullShortUrl, request, response));
                 ((HttpServletResponse) response).sendRedirect(originalLink);
                 return;
             }
+            // 二次校验空值缓存，避免同一无效短链重复穿透到数据库
             gotoIsNullShortLink = stringRedisTemplate.opsForValue().get(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl));
             if (StrUtil.isNotBlank(gotoIsNullShortLink)) {
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
+            // 步骤7：查跳转路由表取 gid（t_link 按 gid 分片，需经 t_link_goto 两跳定位数据分片）
             LambdaQueryWrapper<ShortLinkGotoDO> linkGotoQueryWrapper = Wrappers.lambdaQuery(ShortLinkGotoDO.class)
                     .eq(ShortLinkGotoDO::getFullShortUrl, fullShortUrl);
             ShortLinkGotoDO shortLinkGotoDO = shortLinkGotoMapper.selectOne(linkGotoQueryWrapper);
             if (shortLinkGotoDO == null) {
+                // 边界：路由记录缺失，写入 value 为 "-" 的空值缓存（判空用 isNotBlank，不能用空串）
                 stringRedisTemplate.opsForValue().set(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl), "-", 30, TimeUnit.MINUTES);
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
+            // 步骤8：按 gid + fullShortUrl 查业务表，并校验未删除（del_flag=0）与未禁用（enable_status=0）
             LambdaQueryWrapper<ShortLinkDO> queryWrapper = Wrappers.lambdaQuery(ShortLinkDO.class)
                     .eq(ShortLinkDO::getGid, shortLinkGotoDO.getGid())
                     .eq(ShortLinkDO::getFullShortUrl, fullShortUrl)
                     .eq(ShortLinkDO::getDelFlag, 0)
                     .eq(ShortLinkDO::getEnableStatus, 0);
             ShortLinkDO shortLinkDO = baseMapper.selectOne(queryWrapper);
+            // 边界：记录不存在或 validDate 已过期，同样写 30 分钟空值缓存后跳转未找到页面
             if (shortLinkDO == null || (shortLinkDO.getValidDate() != null && shortLinkDO.getValidDate().before(new Date()))) {
                 stringRedisTemplate.opsForValue().set(String.format(GOTO_IS_NULL_SHORT_LINK_KEY, fullShortUrl), "-", 30, TimeUnit.MINUTES);
                 ((HttpServletResponse) response).sendRedirect("/page/notfound");
                 return;
             }
+            // 步骤9：回写跳转缓存，TTL 取有效期剩余毫秒（永久链接取常量 30 天），确保缓存不超出业务有效期
             stringRedisTemplate.opsForValue().set(
                     String.format(GOTO_SHORT_LINK_KEY, fullShortUrl),
                     shortLinkDO.getOriginUrl(),
                     LinkUtil.getLinkCacheValidTime(shortLinkDO.getValidDate()), TimeUnit.MILLISECONDS
             );
+            // 步骤10：异步投递访问统计（RabbitMQ），随后 302 重定向到原始长链接
             shortLinkStats(buildLinkStatsRecordAndSetUser(fullShortUrl, request, response));
             ((HttpServletResponse) response).sendRedirect(shortLinkDO.getOriginUrl());
         } finally {
+            // 步骤11：任何分支都必须释放分布式锁，避免锁泄漏阻塞该短链后续所有跳转
             lock.unlock();
         }
     }
@@ -489,10 +505,8 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
 
     @Override
     public void shortLinkStats(ShortLinkStatsRecordDTO statsRecord) {
-        Map<String, String> producerMap = new HashMap<>();
-        producerMap.put("statsRecord", JSON.toJSONString(statsRecord));
-        // 消息队列为什么选用RocketMQ？
-        shortLinkStatsSaveProducer.send(producerMap);
+        // Confirm 等待与有限重试由专用线程池异步执行，Broker 故障不能阻塞短链接 302 跳转主链路。
+        shortLinkStatsRabbitDispatcher.send(statsRecord);
     }
 
     private String generateSuffix(ShortLinkCreateReqDTO requestParam) {
@@ -542,6 +556,7 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
 
     @SneakyThrows
     private String getFavicon(String url) {
+        // 注意：此处由服务端发起真实外部请求且未设超时，存在 SSRF 与线程阻塞风险
         URL targetUrl = new URL(url);
         HttpURLConnection connection = (HttpURLConnection) targetUrl.openConnection();
         connection.setRequestMethod("GET");
@@ -555,6 +570,11 @@ public class ShortLinkServiceImpl extends ServiceImpl<ShortLinkMapper, ShortLink
             }
         }
         return null;
+    }
+
+    private void verifyOriginUrl(String originUrl) {
+        // demo 环境限制可跳转的域名范围
+        verificationWhitelist(originUrl);
     }
 
     private void verificationWhitelist(String originUrl) {

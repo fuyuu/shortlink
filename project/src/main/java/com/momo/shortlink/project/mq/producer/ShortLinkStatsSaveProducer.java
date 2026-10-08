@@ -28,7 +28,10 @@ import static com.momo.shortlink.project.common.constant.RedisKeyConstant.SHORT_
 
 /**
  * 短链接监控状态保存消息队列生产者
+ *
+ * @deprecated Redis Stream 生产逻辑已由 {@link ShortLinkStatsRabbitProducer} 重构替代，仅保留用于历史追溯。
  */
+@Deprecated(since = "RabbitMQ重构", forRemoval = false)
 @Component
 @RequiredArgsConstructor
 public class ShortLinkStatsSaveProducer {
@@ -37,7 +40,10 @@ public class ShortLinkStatsSaveProducer {
 
     /**
      * 发送延迟消费短链接统计
+     *
+     * @deprecated 已改用 RabbitMQ 生产者发送持久化消息。
      */
+    @Deprecated(since = "RabbitMQ重构", forRemoval = false)
     public void send(Map<String, String> producerMap) {
         stringRedisTemplate.opsForStream().add(SHORT_LINK_STATS_STREAM_TOPIC_KEY, producerMap);
     }

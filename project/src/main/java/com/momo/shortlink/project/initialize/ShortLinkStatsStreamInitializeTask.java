@@ -19,6 +19,7 @@ package com.momo.shortlink.project.initialize;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
@@ -27,8 +28,16 @@ import static com.momo.shortlink.project.common.constant.RedisKeyConstant.SHORT_
 
 /**
  * 初始化短链接监控消息队列消费者组
+ *
+ * @deprecated 已由 RabbitMQ 队列声明机制重构替代，仅保留用于历史追溯和紧急回滚。
  */
+@Deprecated(since = "RabbitMQ重构", forRemoval = false)
 @Component
+@ConditionalOnProperty(
+        prefix = "short-link.stats.redis-stream",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = false)
 @RequiredArgsConstructor
 public class ShortLinkStatsStreamInitializeTask implements InitializingBean {
 

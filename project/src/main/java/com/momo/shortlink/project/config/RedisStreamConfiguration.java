@@ -19,6 +19,7 @@ package com.momo.shortlink.project.config;
 
 import com.momo.shortlink.project.mq.consumer.ShortLinkStatsSaveConsumer;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
@@ -41,8 +42,16 @@ import static com.momo.shortlink.project.common.constant.RedisKeyConstant.SHORT_
 
 /**
  * Redis Stream 消息队列配置
+ *
+ * @deprecated 已由 RabbitMQ 可靠消息配置重构替代，仅保留用于历史追溯和紧急回滚。
  */
+@Deprecated(since = "RabbitMQ重构", forRemoval = false)
 @Configuration
+@ConditionalOnProperty(
+        prefix = "short-link.stats.redis-stream",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = false)
 @RequiredArgsConstructor
 public class RedisStreamConfiguration {
 
