@@ -1169,3 +1169,12 @@ CREATE TABLE `t_user_9`
     PRIMARY KEY (`id`),
     UNIQUE KEY `idx_unique_username` (`username`) USING BTREE
 ) ENGINE=InnoDB AUTO_INCREMENT=1726852231086505986 DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE `t_link_stats_consume`
+(
+    `id`          bigint(20) NOT NULL AUTO_INCREMENT COMMENT 'ID',
+    `message_id`  varchar(64) NOT NULL COMMENT 'RabbitMQ 访问统计消息唯一标识',
+    `create_time` datetime    NOT NULL COMMENT '首次成功消费时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_message_id` (`message_id`) USING BTREE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='短链接访问统计消息消费幂等记录表';
