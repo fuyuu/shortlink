@@ -2,9 +2,14 @@ dataSources:
   ds_0:
     dataSourceClassName: com.zaxxer.hikari.HikariDataSource
     driverClassName: com.mysql.cj.jdbc.Driver
-    jdbcUrl: jdbc:mysql://127.0.0.1:3306/link?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true&allowMultiQueries=true&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    jdbcUrl: jdbc:mysql://127.0.0.1:3306/shortlink?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true&allowMultiQueries=true&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: root
-    password: root
+    password: "1006"
+    # ShardingSphere driver 模式下的【内层】物理连接池，需与外层 spring.datasource.hikari 对齐，
+    # 详见 aggregation/shardingsphere-config-dev.yaml 注释。
+    maximumPoolSize: 50
+    minimumIdle: 10
+    connectionTimeout: 10000
 
 rules:
   - !SHARDING
@@ -41,4 +46,5 @@ rules:
         props:
           sharding-count: 16
 props:
-  sql-show: true
+  # sql-show 必须在此关闭：Spring profile 覆盖不到这里，详见 aggregation dev 同名文件注释。
+  sql-show: false
