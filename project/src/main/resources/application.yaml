@@ -11,7 +11,19 @@ spring:
     redis:
       host: 127.0.0.1
       port: 6379
-      password: 123456
+      password: "123456"
+  # RabbitMQ 负责短链接访问统计的异步削峰，连接信息可由环境变量覆盖。
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    connection-timeout: 3s
+    # correlated 开启发布确认；returns + mandatory 捕获不可路由消息。
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
   mvc:
     view:
       prefix: /templates/
@@ -20,13 +32,38 @@ spring:
     nacos:
       discovery:
         server-addr: 127.0.0.1:8848
+        username: nacos
+        password: nacos
 
 short-link:
   domain:
-    default: nurl.ink:8001
+    default: localhost:5173
   stats:
     locale:
+      enable: true
       amap-key: 824c511f0997586ea016f979fdb23087
+    rabbit:
+      publisher:
+        # 最大尝试 3 次（包含首次），每次在专用发布线程中等待 Broker Confirm 最多 5 秒。
+        max-attempts: 3
+        retry-interval: 500
+        confirm-timeout: 5000
+        executor:
+          # 有界线程池隔离 302 请求线程；队列满载时降级记录完整统计消息。
+          core-size: 2
+          max-size: 4
+          queue-capacity: 1000
+          shutdown-wait-seconds: 20
+      consumer:
+        # 最大尝试 3 次（包含首次），每次失败固定等待 1 秒后重试。
+        max-attempts: 3
+        retry-interval: 1000
+        prefetch: 50
+        concurrency: 2
+        max-concurrency: 4
+    # 旧 Redis Stream 链路仅为紧急回滚保留，默认不启动。
+    redis-stream:
+      enabled: false
   goto-domain:
     white-list:
       enable: true
@@ -39,5 +76,10 @@ short-link:
 
 mybatis-plus:
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
   mapper-locations: classpath:mapper/*.xml
+
+# 日志格式：MDC statsMsg 前置，风格对齐 Nacos
+logging:
+  pattern:
+    console: "[%mdc{statsMsg:--------}] %d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %msg%n"
