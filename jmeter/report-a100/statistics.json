@@ -1,0 +1,34 @@
+{
+  "Total" : {
+    "transaction" : "Total",
+    "sampleCount" : 340637,
+    "errorCount" : 0,
+    "errorPct" : 0.0,
+    "meanResTime" : 51.30609417062755,
+    "medianResTime" : 27.0,
+    "minResTime" : 2.0,
+    "maxResTime" : 531.0,
+    "pct1ResTime" : 95.0,
+    "pct2ResTime" : 121.0,
+    "pct3ResTime" : 155.0,
+    "throughput" : 1892.2385539223856,
+    "receivedKBytesPerSec" : 328.461554886178,
+    "sentKBytesPerSec" : 315.9624738481013
+  },
+  "GET /1bhtK（短码跳转）" : {
+    "transaction" : "GET /1bhtK（短码跳转）",
+    "sampleCount" : 340637,
+    "errorCount" : 0,
+    "errorPct" : 0.0,
+    "meanResTime" : 51.30609417062755,
+    "medianResTime" : 27.0,
+    "minResTime" : 2.0,
+    "maxResTime" : 531.0,
+    "pct1ResTime" : 95.0,
+    "pct2ResTime" : 121.0,
+    "pct3ResTime" : 155.0,
+    "throughput" : 1892.2385539223856,
+    "receivedKBytesPerSec" : 328.461554886178,
+    "sentKBytesPerSec" : 315.9624738481013
+  }
+}
