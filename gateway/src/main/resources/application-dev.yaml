@@ -1,0 +1,43 @@
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: short-link-admin
+          uri: lb://short-link-admin/api/short-link/admin/**
+          predicates:
+            - Path=/api/short-link/admin/**
+          filters:
+            - name: TokenValidate
+              args:
+                whitePathList:
+                  - /api/short-link/admin/v1/user/login
+                  - /api/short-link/admin/v1/user/has-username
+
+        - id: short-link-project
+          # 真正有效的 lb://short-link-admin  →  负载均衡到 short-link-admin 服务
+          # 只保留 lb://服务名
+          uri: lb://short-link-project/api/short-link/**
+          predicates:
+            - Path=/api/short-link/**
+          filters:
+            - name: TokenValidate
+
+        # 短链接跳转：/{短码} -> 短链接项目服务
+        # PreserveHostHeader 必须加：后端 restoreUrl() 用 Host 拼 fullShortUrl 查缓存/DB，
+        # 网关默认会把 Host 改写成下游实例地址，导致拼出错误的 fullShortUrl 而 302 notfound。
+        - id: short-link-redirect
+          uri: lb://short-link-project
+          order: 10
+          predicates:
+            - Path=/{code}
+          filters:
+            - PreserveHostHeader
+
+        # 短链不存在/已删除/已过期的兜底页（后端直接 sendRedirect("/page/notfound")）
+        - id: short-link-notfound
+          uri: lb://short-link-project
+          order: 11
+          predicates:
+            - Path=/page/**
+          filters:
+            - PreserveHostHeader

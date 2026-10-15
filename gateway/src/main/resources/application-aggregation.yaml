@@ -1,0 +1,60 @@
+spring:
+  cloud:
+    gateway:
+      # ========== Netty HttpClient 连接池（防压测端口耗尽）==========
+      # 压测 1000+ QPS 时，默认无连接池配置导致每请求新建连接 → Windows 临时端口耗尽
+      # → BindException: Address already in use → 500 异常（约 20% 错误率）
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 10s
+        pool:
+          # fixed 类型：预分配固定大小连接池，避免弹性扩缩容带来的端口抖动
+          type: fixed
+          # 每个路由（route）最大并发连接数。3 个路由 × 200 = 600 个连接足够覆盖 1500 QPS
+          max-connections: 200
+          # 从池中获取连接的超时时间。池满时排队等待，而不是新建连接打爆端口
+          acquire-timeout: 3000
+          # 空闲连接保留时间。太短频繁重建连接（又吃端口），太长占着不用
+          max-idle-time: 45s
+        # Keep-Alive 让连接复用，一条连接处理多个请求，大幅减少端口消耗
+        keep-alive-timeout: 60s
+      routes:
+        - id: short-link-admin-aggregation
+          uri: lb://short-link-aggregation/api/short-link/admin/**
+          order: -1
+          predicates:
+            - Path=/api/short-link/admin/**
+          filters:
+            - name: TokenValidate
+              args:
+                whitePathList:
+                  - /api/short-link/admin/v1/user/login
+                  - /api/short-link/admin/v1/user/has-username
+
+        - id: short-link-project-aggregation
+          uri: lb://short-link-aggregation/api/short-link/**
+          order: 0
+          predicates:
+            - Path=/api/short-link/**
+          filters:
+            - name: TokenValidate
+
+        # 短链接跳转：/{短码} -> 聚合服务
+        # PreserveHostHeader 必须加：后端 restoreUrl() 用 Host 拼 fullShortUrl 查缓存/DB，
+        # 网关默认会把 Host 改写成下游实例地址，导致拼成 127.0.0.1:8003/xxx 而 302 notfound。
+        - id: short-link-redirect-aggregation
+          uri: lb://short-link-aggregation
+          order: 10
+          predicates:
+            - Path=/{code}
+          filters:
+            - PreserveHostHeader
+
+        # 短链不存在/已删除/已过期的兜底页（后端直接 sendRedirect("/page/notfound")）
+        - id: short-link-notfound-aggregation
+          uri: lb://short-link-aggregation
+          order: 11
+          predicates:
+            - Path=/page/**
+          filters:
+            - PreserveHostHeader
