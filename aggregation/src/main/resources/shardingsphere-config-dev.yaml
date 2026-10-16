@@ -1,0 +1,80 @@
+dataSources:
+  ds_0:
+    dataSourceClassName: com.zaxxer.hikari.HikariDataSource
+    driverClassName: com.mysql.cj.jdbc.Driver
+    jdbcUrl: jdbc:mysql://127.0.0.1:3306/shortlink?useUnicode=true&characterEncoding=UTF-8&rewriteBatchedStatements=true&allowMultiQueries=true&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: root
+    password: "1006"
+    # ShardingSphere driver 模式下这是【内层】物理连接池：
+    # 外层 spring.datasource.hikari.* 只池化 ShardingSphere 逻辑连接，
+    # 每个事务执行真实 SQL 时还要从这里借物理连接，内层默认 maximumPoolSize=10，
+    # 消费端（统计落库）+ 302 冷 key 回源并发一上来就会在这里排队甚至耗尽。
+    # 必须与外层 loadtest 的 50 对齐，否则内层先成为瓶颈。
+    maximumPoolSize: 50
+    minimumIdle: 10
+    connectionTimeout: 10000
+
+rules:
+  - !SHARDING
+    tables:
+      t_user:
+        actualDataNodes: ds_0.t_user_${0..15}
+        tableStrategy:
+          standard:
+            shardingColumn: username
+            shardingAlgorithmName: user_table_hash_mod
+      t_group:
+        actualDataNodes: ds_0.t_group_${0..15}
+        tableStrategy:
+          standard:
+            shardingColumn: username
+            shardingAlgorithmName: group_table_hash_mod
+      t_link:
+        actualDataNodes: ds_0.t_link_${0..15}
+        tableStrategy:
+          standard:
+            shardingColumn: gid
+            shardingAlgorithmName: link_table_hash_mod
+      t_link_goto:
+        actualDataNodes: ds_0.t_link_goto_${0..15}
+        tableStrategy:
+          standard:
+            shardingColumn: full_short_url
+            shardingAlgorithmName: link_goto_table_hash_mod
+    shardingAlgorithms:
+      user_table_hash_mod:
+        type: HASH_MOD
+        props:
+          sharding-count: 16
+      group_table_hash_mod:
+        type: HASH_MOD
+        props:
+          sharding-count: 16
+      link_table_hash_mod:
+        type: HASH_MOD
+        props:
+          sharding-count: 16
+      link_goto_table_hash_mod:
+        type: HASH_MOD
+        props:
+          sharding-count: 16
+  - !ENCRYPT
+    tables:
+      t_user:
+        columns:
+          phone:
+            cipherColumn: phone
+            encryptorName: common_encryptor
+          mail:
+            cipherColumn: mail
+            encryptorName: common_encryptor
+        queryWithCipherColumn: true
+    encryptors:
+      common_encryptor:
+        type: AES
+        props:
+          aes-key-value: d6oadClrrb9A3GWo
+props:
+  # sql-show 每条 SQL 打印 logic+actual 两行且走 stdout 全局锁；该属性在 shardingsphere yaml 内，
+  # Spring 的 loadtest profile 覆盖不到，必须在这里关闭（消费端日志刷屏与消费串行化的元凶）。
+  sql-show: false

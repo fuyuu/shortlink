@@ -1,0 +1,123 @@
+server:
+  port: 8003
+
+spring:
+  application:
+    name: short-link-aggregation
+  datasource:
+    driver-class-name: org.apache.shardingsphere.driver.ShardingSphereDriver
+    url: jdbc:shardingsphere:classpath:shardingsphere-config-${database.env:dev}.yaml
+    # 外层池：池化的是 ShardingSphere 逻辑连接；执行真实 SQL 还要借
+    # shardingsphere-config-*.yaml 里 ds_0 的【内层】物理连接池（已同步扩到 50）。
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 10
+      connection-timeout: 10000
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password: "123456"
+  # 聚合模式同样承载访问统计 RabbitMQ 生产与消费链路。
+  rabbitmq:
+    host: ${RABBITMQ_HOST:127.0.0.1}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    connection-timeout: 3s
+    # correlated 开启发布确认；returns + mandatory 捕获不可路由消息。
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+  mvc:
+    view:
+      prefix: /templates/
+      suffix: .html
+  cloud:
+    nacos:
+      discovery:
+        server-addr: 127.0.0.1:8848
+        username: nacos
+        password: nacos
+
+aggregation:
+  remote-url: http://127.0.0.1:${server.port}
+
+short-link:
+  group:
+    max-num: 20
+  flow-limit:
+    enable: false
+    time-window: 1
+    max-access-count: 20
+  domain:
+    default: localhost:5173
+  demo-mode:
+    enable: false
+    blacklist:
+      - /api/short-link/admin/v1/group
+      - /api/short-link/admin/v1/recycle-bin/remove
+      - /api/short-link/admin/v1/create
+      - /api/short-link/admin/v1/create/batch
+      - /api/short-link/admin/v1/update
+      - /api/short-link/admin/v1/user
+      - /api/short-link/admin/v1/user/logout
+      - /api/short-link/admin/v1/recycle-bin/save
+  stats:
+    locale:
+      enable: true
+      amap-key: 824c511f0997586ea016f979fdb23087
+    rabbit:
+      publisher:
+        # 最大尝试 3 次（包含首次），每次在专用发布线程中等待 Broker Confirm 最多 5 秒。
+        max-attempts: 3
+        retry-interval: 500
+        confirm-timeout: 5000
+        executor:
+          # 有界线程池隔离 302 请求线程；队列满载时降级记录完整统计消息。
+          core-size: 2
+          max-size: 4
+          queue-capacity: 1000
+          shutdown-wait-seconds: 20
+      consumer:
+        # 最大尝试 3 次（包含首次），每次失败固定等待 1 秒后重试。
+        max-attempts: 3
+        retry-interval: 1000
+        prefetch: 50
+        concurrency: 2
+        max-concurrency: 4
+    # 旧 Redis Stream 链路仅为紧急回滚保留，默认不启动。
+    redis-stream:
+      enabled: false
+  goto-domain:
+    white-list:
+      enable: false
+      names: 'momo,知乎,掘金,博客园'
+      details:
+        - momo.com
+        - zhihu.com
+        - juejin.cn
+        - cnblogs.com
+
+mybatis-plus:
+  configuration:
+    # Slf4jImpl：SQL 日志走 SLF4J，配合 MDC 可在多消费者并发时区分每条消息的事务链路
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  mapper-locations: classpath:mapper/*.xml
+
+# 日志格式：MDC statsMsg 前置，风格对齐 Nacos（[requestId] message）
+# 输出示例：[11cb9b18] 2026-10-17 19:06:43 INFO  ==>  Preparing: SELECT ...
+# 无 MDC 上下文的日志显示为 [--------] ，非统计事务的日志不受影响
+logging:
+  pattern:
+    console: "[%mdc{statsMsg:--------}] %d{HH:mm:ss.SSS} %-5level [%thread] %msg%n"
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  metrics:
+    tags:
+      application: ${spring.application.name}

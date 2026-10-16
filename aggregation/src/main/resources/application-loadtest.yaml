@@ -1,0 +1,78 @@
+# ============================================================================
+# 压测专用 profile —— 默认不生效，不影响正常启动与业务正确性
+#
+# 启用：java -jar aggregation.jar --spring.profiles.active=loadtest
+# 回滚：启动参数去掉 loadtest 即可（本文件保留也不影响默认行为）
+#
+# 设计原则：
+#   1. 只覆盖「并发/线程/日志」相关参数，不改任何业务语义
+#   2. 不触碰 flow-limit / goto-domain 白名单 / demo-mode 等业务开关
+#   3. 所有取值都能通过删掉本 profile 一键恢复默认
+# ============================================================================
+
+server:
+  tomcat:
+    # 开启 MBean 注册后，/actuator/metrics/tomcat.threads.* 才会暴露
+    # （Spring Boot 3 默认关闭，不开的话这些指标一律 404，无法验证线程池配置是否生效）
+    mbeanregistry:
+      enabled: true
+    threads:
+      # 默认 200。按「目标 QPS × 平均 RT」估算：
+      #   1500 QPS × 0.14s ≈ 210 并发；2000 QPS × 0.14s ≈ 280 并发
+      # 取 400 留一倍余量，避免压测时请求堆在 accept 队列里被误判为「应用慢」
+      max: 400
+      # 默认 10。预热期需要快速拉起工作线程，避免爬坡阶段误判
+      min-spare: 50
+    # 默认 100。瞬时并发超过 max-threads 时先在这里排队，而不是直接拒绝连接
+    accept-count: 200
+
+short-link:
+  stats:
+    locale:
+      # 压测时关闭高德 IP 定位：免费 key QPS 有限（50~300），并发一高就触发限流，
+      # 原 HTTP 调用在事务内阻塞最多 5s → 数据库连接池耗尽 → 雪崩。
+      # 关闭后 locale 统计全部记为"未知"，不影响其他 8 张统计表。
+      enable: false
+    rabbit:
+      publisher:
+        executor:
+          # 默认 2/4/1000。该池是跳转链路的异步出口：
+          #   处理能力 ≈ max-size / (序列化 + publish + confirm 等待)
+          #   按 confirm 3ms 估算，4 线程 ≈ 1300 QPS，压到 1400 QPS 就会开始拒绝
+          # 提到 4/8 使处理能力覆盖到 ~2600 QPS
+          core-size: 4
+          max-size: 8
+          # 默认 1000。队列加深是为了吸收阶梯加压时的瞬时脉冲；
+          # 代价是 Broker 抖动时积压更久、内存占用上升（单条约 0.5~1KB，4000 条约 4MB）
+          queue-capacity: 4000
+      consumer:
+        # 默认 50。prefetch 过大会让消息在单个消费者上堆积，多消费者负载不均；
+        # 20 更利于 4 个消费者之间均衡分配
+        prefetch: 20
+        # 默认 2/4。落库是 9 张表 + 一个外部 HTTP（高德），单条耗时远高于投递，
+        # 消费能力不足会让队列持续上涨，最终反压到发布线程池
+        concurrency: 4
+        max-concurrency: 8
+
+# 压测期间保留 SQL 日志（走 SLF4J + MDC 前缀，方便追踪事务链路）
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+logging:
+  pattern:
+    console: "[%mdc{statsMsg:--------}] %d{HH:mm:ss.SSS} %-5level [%thread] %msg%n"
+  level:
+    root: warn
+    com.momo.shortlink: warn
+spring:
+  datasource:
+    hikari:
+      # 外层逻辑连接池（池化 ShardingSphere 逻辑连接）。注意：内层 ds_0 物理连接池在
+      # shardingsphere-config-*.yaml 里单独配置（默认仅 10，已在所有环境扩到 50），
+      # 两层必须对齐，否则内层先耗尽，表现仍是拿不到连接。
+      maximum-pool-size: 50    # 最大连接数，与内层 ds_0 对齐
+      minimum-idle: 10         # 最小空闲连接
+      connection-timeout: 10000  # 10s 拿不到连接就快速失败，避免压测时请求挂 30s 假死
+      idle-timeout: 600000
+      max-lifetime: 1800000
